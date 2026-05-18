@@ -1,0 +1,17 @@
+{
+  "name": "Disc Stats",
+  "short_name": "DiscStats",
+  "description": "Ultimate team scoring and possession analytics.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6f4ef",
+  "theme_color": "#0f766e",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
