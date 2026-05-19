@@ -12,6 +12,9 @@ export function calculatePlayerStats(players: Player[], events: GameEvent[]): Pl
       const goals = byActor.filter((event) => event.type === "GOAL").length;
       const assists = byActor.filter((event) => event.type === "ASSIST").length;
       const ds = byActor.filter((event) => event.type === "D").length;
+      const pullsIn = byActor.filter((event) => event.type === "PULL_IN").length;
+      const pullsOut = byActor.filter((event) => event.type === "PULL_OUT").length;
+      const pullReceives = byTarget.filter((event) => event.type === "PULL_IN").length;
       const drops = byActor.filter((event) => event.type === "DROP").length;
       const throwaways = byActor.filter((event) => event.type === "THROWAWAY").length;
       const stalls = byActor.filter((event) => event.type === "STALL").length;
@@ -29,6 +32,9 @@ export function calculatePlayerStats(players: Player[], events: GameEvent[]): Pl
         goals,
         assists,
         ds,
+        pullsIn,
+        pullsOut,
+        pullReceives,
         catches,
         drops,
         completedThrows,
@@ -52,6 +58,9 @@ export function calculateTeamStats(game: Game | undefined, events: GameEvent[], 
   const throwaways = teamEvents.filter((event) => event.type === "THROWAWAY").length;
   const stalls = teamEvents.filter((event) => event.type === "STALL").length;
   const ds = teamEvents.filter((event) => event.type === "D").length;
+  const pullsIn = teamEvents.filter((event) => event.type === "PULL_IN").length;
+  const pullsOut = teamEvents.filter((event) => event.type === "PULL_OUT").length;
+  const pulls = pullsIn + pullsOut;
   const turnovers = drops + throwaways + stalls;
   const throwAttempts = passes + throwaways + stalls + drops;
   const catchTargets =
@@ -65,6 +74,9 @@ export function calculateTeamStats(game: Game | undefined, events: GameEvent[], 
     turnovers,
     drops,
     ds,
+    pullsIn,
+    pullsOut,
+    pullPct: pct(pullsIn, pulls),
     throwPct: pct(passes, throwAttempts),
     catchPct: pct(completedCatches, catchTargets),
     offensiveEfficiency: pct(goals, totalPoints)

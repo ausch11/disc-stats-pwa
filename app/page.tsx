@@ -16,6 +16,8 @@ const eventLabels: Record<EventType, string> = {
   THROWAWAY: "传盘失误",
   STALL: "超时失误",
   D: "D盘",
+  PULL_IN: "Pull界内",
+  PULL_OUT: "Pull出界",
   SUBSTITUTION: "换人",
   NOTE: "备注"
 };
@@ -136,6 +138,7 @@ export default function Home() {
   const [hydrated, setHydrated] = useState(false);
   const [holderId, setHolderId] = useState<string | undefined>();
   const [targetId, setTargetId] = useState<string | undefined>();
+  const [pendingPullerId, setPendingPullerId] = useState<string | undefined>();
   const [newPlayer, setNewPlayer] = useState({ name: "", number: "", position: "" });
   const [newGame, setNewGame] = useState({
     homeName: "主队",
@@ -186,6 +189,9 @@ export default function Home() {
     [currentGame?.awayTeamId, state?.players]
   );
   const activePlayers = activeTeamId === currentGame?.homeTeamId ? homePlayers : awayPlayers;
+  const defenseTeamId = currentGame && activeTeamId ? getOtherTeamId(currentGame, activeTeamId) : undefined;
+  const defenseTeam = state?.teams.find((team) => team.id === defenseTeamId);
+  const defensePlayers = defenseTeamId === currentGame?.homeTeamId ? homePlayers : awayPlayers;
   const activeLineupPlayers = useMemo(
     () =>
       activePlayers.filter((player) =>
@@ -193,10 +199,25 @@ export default function Home() {
       ),
     [activePlayers, activeTeamId, currentGame?.lineupIdsByTeam]
   );
+  const defenseLineupPlayers = useMemo(
+    () =>
+      defensePlayers.filter((player) =>
+        defenseTeamId ? currentGame?.lineupIdsByTeam[defenseTeamId]?.includes(player.id) : false
+      ),
+    [defensePlayers, defenseTeamId, currentGame?.lineupIdsByTeam]
+  );
   const gameEvents = useMemo(
     () => state?.events.filter((event) => event.gameId === currentGame?.id) ?? [],
     [currentGame?.id, state?.events]
   );
+  const currentPointEvents = useMemo(
+    () => gameEvents.filter((event) => event.pointId === currentGame?.currentPointId),
+    [currentGame?.currentPointId, gameEvents]
+  );
+  const hasPullThisPoint = currentPointEvents.some(
+    (event) => event.type === "PULL_IN" || event.type === "PULL_OUT"
+  );
+  const offenseLockedUntilPull = !hasPullThisPoint && !pendingPullerId;
   const homeEvents = gameEvents.filter((event) => event.teamId === currentGame?.homeTeamId);
   const awayEvents = gameEvents.filter((event) => event.teamId === currentGame?.awayTeamId);
   const homePlayerStats = useMemo(() => calculatePlayerStats(homePlayers, homeEvents), [homePlayers, homeEvents]);
@@ -226,6 +247,7 @@ export default function Home() {
     }));
     setHolderId(pair.holderId);
     setTargetId(pair.targetId);
+    setPendingPullerId(undefined);
   }
 
   function switchToTeamAfterTurnover(teamId: string) {
@@ -239,6 +261,7 @@ export default function Home() {
     }));
     setHolderId(pair.holderId);
     setTargetId(pair.targetId);
+    setPendingPullerId(undefined);
   }
 
   function appendEvent(type: EventType, actorPlayerId?: string, targetPlayerId?: string, note?: string) {
@@ -249,6 +272,33 @@ export default function Home() {
       gameId: currentGame.id,
       pointId: currentGame.currentPointId,
       teamId: activeTeamId,
+      type,
+      actorPlayerId,
+      targetPlayerId,
+      note,
+      createdAt: new Date().toISOString()
+    };
+
+    updateState((draft) => ({
+      ...draft,
+      events: [...draft.events, event]
+    }));
+  }
+
+  function appendEventForTeam(
+    teamId: string,
+    type: EventType,
+    actorPlayerId?: string,
+    targetPlayerId?: string,
+    note?: string
+  ) {
+    if (!currentGame) return;
+
+    const event: GameEvent = {
+      id: createId("event"),
+      gameId: currentGame.id,
+      pointId: currentGame.currentPointId,
+      teamId,
       type,
       actorPlayerId,
       targetPlayerId,
@@ -283,7 +333,10 @@ export default function Home() {
               ...game,
               lineupIdsByTeam: {
                 ...game.lineupIdsByTeam,
-                [activeTeamId]: [...(game.lineupIdsByTeam[activeTeamId] ?? []), player.id]
+                [activeTeamId]:
+                  (game.lineupIdsByTeam[activeTeamId] ?? []).length >= 7
+                    ? game.lineupIdsByTeam[activeTeamId] ?? []
+                    : [...(game.lineupIdsByTeam[activeTeamId] ?? []), player.id]
               }
             }
           : game
@@ -311,7 +364,9 @@ export default function Home() {
         const exists = currentLineup.includes(playerId);
         const lineupIds = exists
           ? currentLineup.filter((id) => id !== playerId)
-          : [...currentLineup, playerId].slice(0, 14);
+          : currentLineup.length >= 7
+            ? currentLineup
+            : [...currentLineup, playerId];
         return { ...game, lineupIdsByTeam: { ...game.lineupIdsByTeam, [teamId]: lineupIds } };
       })
     }));
@@ -383,6 +438,47 @@ export default function Home() {
     updateState((draft) => ({ ...draft, currentGameId: gameId, activeTeamId: teamId }));
     setHolderId(pair.holderId);
     setTargetId(pair.targetId);
+    setPendingPullerId(undefined);
+  }
+
+  function deleteGame(gameId: string) {
+    if (!state) return;
+    const gameToDelete = state.games.find((game) => game.id === gameId);
+    if (!gameToDelete) return;
+
+    const label = `${getTeamName(state.teams, gameToDelete.homeTeamId)} vs ${getTeamName(
+      state.teams,
+      gameToDelete.awayTeamId
+    )}`;
+    if (!window.confirm(`删除这场比赛记录？\n${label}\n删除后会移除该比赛的所有分数和事件。`)) return;
+
+    const remainingGames = state.games.filter((game) => game.id !== gameId);
+    const remainingTeamIds = new Set(remainingGames.flatMap((game) => [game.homeTeamId, game.awayTeamId]));
+    const currentStillExists =
+      state.currentGameId && state.currentGameId !== gameId
+        ? remainingGames.find((game) => game.id === state.currentGameId)
+        : undefined;
+    const nextGame = currentStillExists ?? remainingGames[0];
+    const nextTeamId = nextGame?.possessionTeamId ?? nextGame?.homeTeamId;
+    const nextLineup = state.players.filter((player) =>
+      nextGame && nextTeamId ? nextGame.lineupIdsByTeam[nextTeamId]?.includes(player.id) : false
+    );
+    const pair = getDefaultPair(nextLineup);
+
+    updateState((draft) => ({
+      ...draft,
+      teams: draft.teams.filter((team) => remainingTeamIds.has(team.id)),
+      players: draft.players.filter((player) => remainingTeamIds.has(player.teamId)),
+      games: remainingGames,
+      points: draft.points.filter((point) => point.gameId !== gameId),
+      events: draft.events.filter((event) => event.gameId !== gameId),
+      currentGameId: nextGame?.id,
+      activeTeamId: nextTeamId
+    }));
+
+    setHolderId(pair.holderId);
+    setTargetId(pair.targetId);
+    setPendingPullerId(undefined);
   }
 
   function completePass() {
@@ -427,7 +523,12 @@ export default function Home() {
         ...currentGame,
         homeScore: currentGame.homeScore + (activeTeamId === currentGame.homeTeamId ? 1 : 0),
         awayScore: currentGame.awayScore + (activeTeamId === currentGame.awayTeamId ? 1 : 0),
-        possessionTeamId: nextPossessionTeamId
+        possessionTeamId: nextPossessionTeamId,
+        lineupIdsByTeam: {
+          ...currentGame.lineupIdsByTeam,
+          [currentGame.homeTeamId]: [],
+          [currentGame.awayTeamId]: []
+        }
       };
       const nextPoint = makePoint(updatedGame, draft.points, nextPossessionTeamId);
 
@@ -447,10 +548,135 @@ export default function Home() {
       };
     });
 
-    const nextLineup = state?.players.filter((player) => currentGame.lineupIdsByTeam[nextPossessionTeamId]?.includes(player.id)) ?? [];
-    const pair = getDefaultPair(nextLineup);
-    setHolderId(pair.holderId);
-    setTargetId(pair.targetId);
+    setHolderId(undefined);
+    setTargetId(undefined);
+    setPendingPullerId(undefined);
+  }
+
+  function recordCatchBy(receiverId: string) {
+    if (!currentGame || !activeTeamId) return;
+
+    if (pendingPullerId) {
+      const pullingTeamId = getOtherTeamId(currentGame, activeTeamId);
+      appendEventForTeam(pullingTeamId, "PULL_IN", pendingPullerId, receiverId);
+      setHolderId(receiverId);
+      setTargetId(undefined);
+      setPendingPullerId(undefined);
+      return;
+    }
+
+    if (offenseLockedUntilPull) return;
+
+    if (!holderId || holderId === receiverId) {
+      setHolderId(receiverId);
+      setTargetId(undefined);
+      return;
+    }
+
+    appendEventForTeam(activeTeamId, "PASS_COMPLETE", holderId, receiverId);
+    setHolderId(receiverId);
+    setTargetId(undefined);
+  }
+
+  function recordDropBy(receiverId: string) {
+    if (!currentGame || !activeTeamId || offenseLockedUntilPull || !holderId || holderId === receiverId) return;
+    appendEventForTeam(activeTeamId, "DROP", receiverId, holderId);
+    switchToTeamAfterTurnover(getOtherTeamId(currentGame, activeTeamId));
+  }
+
+  function recordGoalBy(receiverId: string) {
+    if (!currentGame || !activeTeamId || offenseLockedUntilPull || pendingPullerId) return;
+
+    const sequence = createId("score");
+    const now = new Date().toISOString();
+    const events: GameEvent[] = [];
+
+    if (holderId && holderId !== receiverId) {
+      events.push({
+        id: createId("event"),
+        gameId: currentGame.id,
+        pointId: currentGame.currentPointId,
+        teamId: activeTeamId,
+        type: "ASSIST",
+        actorPlayerId: holderId,
+        targetPlayerId: receiverId,
+        note: sequence,
+        createdAt: now
+      });
+    }
+
+    events.push({
+      id: createId("event"),
+      gameId: currentGame.id,
+      pointId: currentGame.currentPointId,
+      teamId: activeTeamId,
+      type: "GOAL",
+      actorPlayerId: receiverId,
+      targetPlayerId: holderId,
+      note: sequence,
+      createdAt: now
+    });
+
+    const nextPossessionTeamId = getOtherTeamId(currentGame, activeTeamId);
+
+    updateState((draft) => {
+      const updatedGame = {
+        ...currentGame,
+        homeScore: currentGame.homeScore + (activeTeamId === currentGame.homeTeamId ? 1 : 0),
+        awayScore: currentGame.awayScore + (activeTeamId === currentGame.awayTeamId ? 1 : 0),
+        possessionTeamId: nextPossessionTeamId,
+        lineupIdsByTeam: {
+          ...currentGame.lineupIdsByTeam,
+          [currentGame.homeTeamId]: [],
+          [currentGame.awayTeamId]: []
+        }
+      };
+      const nextPoint = makePoint(updatedGame, draft.points, nextPossessionTeamId);
+
+      return {
+        ...draft,
+        activeTeamId: nextPossessionTeamId,
+        events: [...draft.events, ...events],
+        points: [
+          ...draft.points.map((point) =>
+            point.id === currentGame.currentPointId ? { ...point, scoringTeamId: activeTeamId } : point
+          ),
+          nextPoint
+        ],
+        games: draft.games.map((game) =>
+          game.id === currentGame.id ? { ...updatedGame, currentPointId: nextPoint.id } : game
+        )
+      };
+    });
+
+    setHolderId(undefined);
+    setTargetId(undefined);
+    setPendingPullerId(undefined);
+  }
+
+  function recordDBy(defenderId: string) {
+    if (!currentGame || !activeTeamId || !hasPullThisPoint || pendingPullerId) return;
+    const defensiveTeamId = getOtherTeamId(currentGame, activeTeamId);
+    appendEventForTeam(defensiveTeamId, "D", defenderId);
+    updateState((draft) => ({
+      ...draft,
+      activeTeamId: defensiveTeamId,
+      games: draft.games.map((game) =>
+        game.id === currentGame.id ? { ...game, possessionTeamId: defensiveTeamId } : game
+      )
+    }));
+    setHolderId(defenderId);
+    setTargetId(undefined);
+  }
+
+  function recordPullBy(pullerId: string, inBounds: boolean) {
+    if (!currentGame || !activeTeamId || hasPullThisPoint || pendingPullerId) return;
+    const pullingTeamId = getOtherTeamId(currentGame, activeTeamId);
+    if (inBounds) {
+      setPendingPullerId(pullerId);
+      return;
+    }
+    appendEventForTeam(pullingTeamId, "PULL_OUT", pullerId);
   }
 
   function recordDrop() {
@@ -512,6 +738,7 @@ export default function Home() {
         })
       };
     });
+    setPendingPullerId(undefined);
   }
 
   async function syncNow() {
@@ -557,8 +784,12 @@ export default function Home() {
                 <strong>{player.name}</strong>
                 <div className="muted">{player.position || "未设置位置"}</div>
               </div>
-              <button className={`chip ${lineup.includes(player.id) ? "active" : ""}`} onClick={() => toggleLineup(player.id, team.id)}>
-                {lineup.includes(player.id) ? "场上" : "替补"}
+              <button
+                className={`chip ${lineup.includes(player.id) ? "active" : ""}`}
+                onClick={() => toggleLineup(player.id, team.id)}
+                disabled={!lineup.includes(player.id) && lineup.length >= 7}
+              >
+                {lineup.includes(player.id) ? "场上" : lineup.length >= 7 ? "已满" : "替补"}
               </button>
             </div>
           ))}
@@ -573,7 +804,9 @@ export default function Home() {
         <div className="section stats-title-row">
           <div>
             <h2>{title}</h2>
-            <span className="muted">传盘 {stats?.throwPct ?? 0}% · 接盘 {stats?.catchPct ?? 0}% · 失误 {stats?.turnovers ?? 0}</span>
+            <span className="muted">
+              传盘 {stats?.throwPct ?? 0}% · 接盘 {stats?.catchPct ?? 0}% · Pull界内 {stats?.pullPct ?? 0}% · 失误 {stats?.turnovers ?? 0}
+            </span>
           </div>
           <button className="btn secondary small" onClick={() => downloadCsv(`${title}-player-stats.csv`, playerStatsToCsv(rows))}>
             导出统计
@@ -588,6 +821,9 @@ export default function Home() {
                 <th>得分</th>
                 <th>助攻</th>
                 <th>D</th>
+                <th>Pull界内</th>
+                <th>Pull出界</th>
+                <th>接Pull</th>
                 <th>接盘</th>
                 <th>Drop</th>
                 <th>成功传盘</th>
@@ -605,6 +841,9 @@ export default function Home() {
                   <td>{row.goals}</td>
                   <td>{row.assists}</td>
                   <td>{row.ds}</td>
+                  <td>{row.pullsIn}</td>
+                  <td>{row.pullsOut}</td>
+                  <td>{row.pullReceives}</td>
                   <td>{row.catches}</td>
                   <td>{row.drops}</td>
                   <td>{row.completedThrows}</td>
@@ -621,10 +860,200 @@ export default function Home() {
     );
   }
 
-  if (!state || !currentGame) {
+  function renderQuickLine(team: Team | undefined, players: Player[], role: "offense" | "defense") {
+    if (!team) return null;
+    const isOffense = role === "offense";
+
+    return (
+      <section className={`quick-line ${isOffense ? "offense" : "defense"}`}>
+        <div className="quick-line-head">
+          <div>
+            <span className="line-kicker">{isOffense ? "O-line" : "D-line"}</span>
+            <h3>{team.name}</h3>
+          </div>
+          <span className="count">{players.length} 人</span>
+        </div>
+        <div className="quick-player-list">
+          {players.length === 0 ? (
+            <div className="empty">先在左侧把队员设为场上。</div>
+          ) : (
+            players.map((player) => (
+              <div className={`quick-player ${holderId === player.id ? "holding" : ""}`} key={player.id}>
+                <button className="quick-name" onClick={() => setHolderId(player.id)}>
+                  <span className="number">{player.number || "--"}</span>
+                  <span>{player.name}</span>
+                </button>
+                {isOffense ? (
+                  <div className="quick-actions three">
+                    <button
+                      className="quick-btn catch"
+                      onClick={() => recordCatchBy(player.id)}
+                      disabled={offenseLockedUntilPull}
+                    >
+                      {pendingPullerId ? "接Pull" : offenseLockedUntilPull ? "等Pull" : "Catch"}
+                    </button>
+                    <button
+                      className="quick-btn drop"
+                      onClick={() => recordDropBy(player.id)}
+                      disabled={offenseLockedUntilPull || !!pendingPullerId || !holderId || holderId === player.id}
+                    >
+                      Drop
+                    </button>
+                    <button
+                      className="quick-btn goal"
+                      onClick={() => recordGoalBy(player.id)}
+                      disabled={offenseLockedUntilPull || !!pendingPullerId}
+                    >
+                      Goal
+                    </button>
+                  </div>
+                ) : (
+                  <div className="quick-actions defense-actions">
+                    <button
+                      className="quick-btn d"
+                      onClick={() => recordDBy(player.id)}
+                      disabled={!hasPullThisPoint || !!pendingPullerId}
+                    >
+                      {hasPullThisPoint && !pendingPullerId ? "D盘" : "等Pull"}
+                    </button>
+                    <button
+                      className="quick-btn pull"
+                      onClick={() => recordPullBy(player.id, true)}
+                      disabled={hasPullThisPoint || !!pendingPullerId}
+                    >
+                      {hasPullThisPoint || pendingPullerId ? "已Pull" : "Pull界内"}
+                    </button>
+                    <button
+                      className="quick-btn pull"
+                      onClick={() => recordPullBy(player.id, false)}
+                      disabled={hasPullThisPoint || !!pendingPullerId}
+                    >
+                      {hasPullThisPoint || pendingPullerId ? "已Pull" : "Pull出界"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+    );
+  }
+
+  function renderPointLineupSetup() {
+    if (!activeTeam || !defenseTeam || !activeTeamId || !defenseTeamId) return null;
+
+    const groups = [
+      {
+        title: "O-line",
+        team: activeTeam,
+        teamId: activeTeamId,
+        players: activePlayers,
+        lineup: activeLineupPlayers
+      },
+      {
+        title: "D-line",
+        team: defenseTeam,
+        teamId: defenseTeamId,
+        players: defensePlayers,
+        lineup: defenseLineupPlayers
+      }
+    ];
+
+    return (
+      <section className="point-lineup-setup">
+        <div className="section-title">
+          <div>
+            <h2>本分阵容设置</h2>
+            <span className="muted">两队各选满 7 人后，记录台会自动可用。</span>
+          </div>
+        </div>
+        <div className="setup-lines">
+          {groups.map((group) => (
+            <div className="setup-line" key={group.teamId}>
+              <div className="quick-line-head">
+                <div>
+                  <span className="line-kicker">{group.title}</span>
+                  <h3>{group.team.name}</h3>
+                </div>
+                <span className={group.lineup.length === 7 ? "count ready" : "count"}>
+                  {group.lineup.length}/7
+                </span>
+              </div>
+              <div className="setup-player-grid">
+                {group.players.map((player) => {
+                  const selected = group.lineup.some((lineupPlayer) => lineupPlayer.id === player.id);
+                  const full = !selected && group.lineup.length >= 7;
+                  return (
+                    <button
+                      className={`setup-player ${selected ? "active" : ""}`}
+                      disabled={full}
+                      key={player.id}
+                      onClick={() => toggleLineup(player.id, group.teamId)}
+                    >
+                      <span className="number">{player.number || "--"}</span>
+                      <span>{player.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  if (!state) {
     return (
       <main className="app-shell">
         <div className="empty">正在准备记录台...</div>
+      </main>
+    );
+  }
+
+  if (!currentGame) {
+    return (
+      <main className="app-shell">
+        <header className="topbar">
+          <div className="brand">
+            <div className="brand-mark">DS</div>
+            <div>
+              <h1>Disc Stats</h1>
+              <span>暂无比赛记录</span>
+            </div>
+          </div>
+        </header>
+        <div className="empty-state">
+          <section className="section empty-card">
+            <div className="section-title">
+              <h2>创建新比赛</h2>
+            </div>
+            <div className="form-grid">
+              <div className="row">
+                <div className="field">
+                  <label htmlFor="empty-home-name">主队</label>
+                  <input
+                    id="empty-home-name"
+                    value={newGame.homeName}
+                    onChange={(event) => setNewGame({ ...newGame, homeName: event.target.value })}
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="empty-away-name">客队</label>
+                  <input
+                    id="empty-away-name"
+                    value={newGame.awayName}
+                    onChange={(event) => setNewGame({ ...newGame, awayName: event.target.value })}
+                  />
+                </div>
+              </div>
+              <button className="btn" onClick={createGame}>
+                创建双队比赛
+              </button>
+            </div>
+          </section>
+        </div>
       </main>
     );
   }
@@ -732,14 +1161,19 @@ export default function Home() {
             </div>
             <div className="game-list">
               {state.games.map((game) => (
-                <button className="game-item" key={game.id} onClick={() => chooseGame(game.id)}>
-                  <strong>
-                    {getTeamName(state.teams, game.homeTeamId)} vs {getTeamName(state.teams, game.awayTeamId)}
-                  </strong>
-                  <span className="muted">
-                    {game.date} · {game.homeScore}:{game.awayScore}
-                  </span>
-                </button>
+                <div className="game-item history-item" key={game.id}>
+                  <button className="history-open" onClick={() => chooseGame(game.id)}>
+                    <strong>
+                      {getTeamName(state.teams, game.homeTeamId)} vs {getTeamName(state.teams, game.awayTeamId)}
+                    </strong>
+                    <span className="muted">
+                      {game.date} · {game.homeScore}:{game.awayScore}
+                    </span>
+                  </button>
+                  <button className="btn danger small" onClick={() => deleteGame(game.id)}>
+                    删除
+                  </button>
+                </div>
               ))}
             </div>
           </section>
@@ -759,7 +1193,40 @@ export default function Home() {
               </button>
             </div>
 
-            <div className="recorder">
+            <div className="quick-recorder">
+              <div className="quick-status">
+                <div>
+                  <span className="line-kicker">当前持盘</span>
+                  <strong>{pendingPullerId ? "请选择接Pull队员" : getPlayerName(state.players, holderId)}</strong>
+                </div>
+                <div>
+                  <span className="line-kicker">第 {state.points.find((point) => point.id === currentGame.currentPointId)?.number ?? 1} 分</span>
+                  <strong>
+                    {pendingPullerId
+                      ? `${getPlayerName(state.players, pendingPullerId)} Pull界内`
+                      : `${activeTeam?.name ?? "O-line"} 进攻`}
+                  </strong>
+                </div>
+                <button className="btn secondary small" onClick={undoLast} disabled={gameEvents.length === 0}>
+                  撤销
+                </button>
+              </div>
+              <div className="quick-lines">
+                {activeLineupPlayers.length === 7 && defenseLineupPlayers.length === 7 ? (
+                  <>
+                    {renderQuickLine(activeTeam, activeLineupPlayers, "offense")}
+                    {renderQuickLine(defenseTeam, defenseLineupPlayers, "defense")}
+                  </>
+                ) : (
+                  renderPointLineupSetup()
+                )}
+              </div>
+              <div className="quick-note">
+                每分必须先记录 Pull。Pull 界内后点击 O-line 的接盘人，之后 Catch / Drop / Goal 才会开放；Pull 出界后可直接选择持盘人继续记录。
+              </div>
+            </div>
+
+            <div className="recorder legacy-recorder">
               <div className="possession">
                 <div className="field-map">
                   <div className="field-content">
@@ -899,6 +1366,14 @@ export default function Home() {
               <div className="metric">
                 <div className="metric-value">{awayTeamStats?.turnovers ?? 0}</div>
                 <div className="metric-label">{awayTeam?.name} 失误</div>
+              </div>
+              <div className="metric">
+                <div className="metric-value">{homeTeamStats?.pullPct ?? 0}%</div>
+                <div className="metric-label">{homeTeam?.name} Pull界内率</div>
+              </div>
+              <div className="metric">
+                <div className="metric-value">{awayTeamStats?.pullPct ?? 0}%</div>
+                <div className="metric-label">{awayTeam?.name} Pull界内率</div>
               </div>
             </div>
           </section>

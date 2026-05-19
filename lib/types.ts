@@ -6,6 +6,8 @@ export type EventType =
   | "THROWAWAY"
   | "STALL"
   | "D"
+  | "PULL_IN"
+  | "PULL_OUT"
   | "SUBSTITUTION"
   | "NOTE";
 
@@ -80,6 +82,9 @@ export type PlayerStats = {
   goals: number;
   assists: number;
   ds: number;
+  pullsIn: number;
+  pullsOut: number;
+  pullReceives: number;
   catches: number;
   drops: number;
   completedThrows: number;
@@ -98,6 +103,9 @@ export type TeamStats = {
   turnovers: number;
   drops: number;
   ds: number;
+  pullsIn: number;
+  pullsOut: number;
+  pullPct: number;
   throwPct: number;
   catchPct: number;
   offensiveEfficiency: number;
