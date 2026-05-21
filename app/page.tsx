@@ -18,7 +18,7 @@ const eventLabels: Record<EventType, string> = {
   D: "D盘",
   PULL_IN: "Pull界内",
   PULL_OUT: "Pull出界",
-  PICKUP: "接手持盘",
+  PICKUP: "接手/捡盘",
   SUBSTITUTION: "换人",
   NOTE: "备注"
 };
@@ -141,6 +141,7 @@ export default function Home() {
   const [targetId, setTargetId] = useState<string | undefined>();
   const [pendingPullerId, setPendingPullerId] = useState<string | undefined>();
   const [pendingPickupTeamId, setPendingPickupTeamId] = useState<string | undefined>();
+  const [timelineExpanded, setTimelineExpanded] = useState(false);
   const [newPlayer, setNewPlayer] = useState({ name: "", number: "", position: "" });
   const [newGame, setNewGame] = useState({
     homeName: "主队",
@@ -220,7 +221,20 @@ export default function Home() {
     (event) => event.type === "PULL_IN" || event.type === "PULL_OUT"
   );
   const offenseLockedUntilPull = !hasPullThisPoint && !pendingPullerId;
-  const awaitingPickup = !!pendingPickupTeamId && pendingPickupTeamId === activeTeamId;
+  const lastCurrentPointEvent = currentPointEvents[currentPointEvents.length - 1];
+  const derivedPendingPickupTeamId =
+    currentGame && lastCurrentPointEvent?.type === "PULL_OUT"
+      ? activeTeamId
+      : currentGame && lastCurrentPointEvent?.type === "THROWAWAY"
+        ? getOtherTeamId(currentGame, lastCurrentPointEvent.teamId)
+        : undefined;
+  const effectivePendingPickupTeamId = pendingPickupTeamId ?? derivedPendingPickupTeamId;
+  const awaitingPickup = !!effectivePendingPickupTeamId && effectivePendingPickupTeamId === activeTeamId;
+  const pendingPickupSource =
+    awaitingPickup && (lastCurrentPointEvent?.type === "PULL_OUT" || lastCurrentPointEvent?.type === "THROWAWAY")
+      ? lastCurrentPointEvent.type
+      : undefined;
+  const pickupActionLabel = pendingPickupSource === "PULL_OUT" ? "捡盘持盘" : "接手持盘";
   const homeEvents = gameEvents.filter((event) => event.teamId === currentGame?.homeTeamId);
   const awayEvents = gameEvents.filter((event) => event.teamId === currentGame?.awayTeamId);
   const homePlayerStats = useMemo(() => calculatePlayerStats(homePlayers, homeEvents), [homePlayers, homeEvents]);
@@ -723,6 +737,9 @@ export default function Home() {
       return;
     }
     appendEventForTeam(pullingTeamId, "PULL_OUT", pullerId);
+    setHolderId(undefined);
+    setTargetId(undefined);
+    setPendingPickupTeamId(activeTeamId);
   }
 
   function recordDrop() {
@@ -941,7 +958,7 @@ export default function Home() {
       case "PULL_OUT":
         return `${actor} Pull出界`;
       case "PICKUP":
-        return `${actor} 接手持盘`;
+        return `${actor} 接手/捡盘持盘`;
       case "STALL":
         return `${actor} Stall`;
       default:
@@ -957,54 +974,66 @@ export default function Home() {
       .sort((a, b) => b.number - a.number);
 
     return (
-      <section className="stats-section timeline-section">
-        <div className="section stats-title-row">
+      <section className={`stats-section timeline-section ${timelineExpanded ? "expanded" : "collapsed"}`}>
+        <button
+          className="section stats-title-row timeline-toggle"
+          type="button"
+          onClick={() => setTimelineExpanded((expanded) => !expanded)}
+          aria-expanded={timelineExpanded}
+        >
           <div>
             <h2>每分事件时间线</h2>
-            <span className="muted">按记录顺序展示每一分的传盘、D盘、失误、Pull 和得分。</span>
+            <span className="muted">
+              {timelineExpanded ? "按记录顺序展示每一分的传盘、D盘、失误、Pull 和得分。" : "点击展开查看每一分的事件顺序。"}
+            </span>
           </div>
-          <span className="count">{gameEvents.length} 条</span>
-        </div>
-        <div className="point-timeline-grid">
-          {gamePoints.map((point) => {
-            const pointEvents = gameEvents.filter((event) => event.pointId === point.id);
-            const passCount = pointEvents.filter((event) => event.type === "PASS_COMPLETE" || event.type === "ASSIST").length;
-            const dCount = pointEvents.filter((event) => event.type === "D").length;
+          <span className="timeline-toggle-meta">
+            <span className="count">{gameEvents.length} 条</span>
+            <span className="timeline-chevron">{timelineExpanded ? "收起" : "展开"}</span>
+          </span>
+        </button>
+        {timelineExpanded ? (
+          <div className="point-timeline-grid">
+            {gamePoints.map((point) => {
+              const pointEvents = gameEvents.filter((event) => event.pointId === point.id);
+              const passCount = pointEvents.filter((event) => event.type === "PASS_COMPLETE" || event.type === "ASSIST").length;
+              const dCount = pointEvents.filter((event) => event.type === "D").length;
 
-            return (
-              <article className="point-timeline" key={point.id}>
-                <div className="point-timeline-head">
-                  <div>
-                    <h3>第 {point.number} 分</h3>
-                    <span className="muted">开始比分 {point.homeScoreBefore}-{point.awayScoreBefore}</span>
+              return (
+                <article className="point-timeline" key={point.id}>
+                  <div className="point-timeline-head">
+                    <div>
+                      <h3>第 {point.number} 分</h3>
+                      <span className="muted">开始比分 {point.homeScoreBefore}-{point.awayScoreBefore}</span>
+                    </div>
+                    <div className="timeline-meta">
+                      <span>传盘 {passCount}</span>
+                      <span>D盘 {dCount}</span>
+                      <span>{pointEvents.length} 事件</span>
+                    </div>
                   </div>
-                  <div className="timeline-meta">
-                    <span>传盘 {passCount}</span>
-                    <span>D盘 {dCount}</span>
-                    <span>{pointEvents.length} 事件</span>
-                  </div>
-                </div>
-                {pointEvents.length === 0 ? (
-                  <div className="empty">这一分还没有事件。</div>
-                ) : (
-                  <ol className="timeline-list">
-                    {pointEvents.map((event, index) => (
-                      <li className={`timeline-item ${event.type.toLowerCase().replace("_", "-")}`} key={event.id}>
-                        <span className="timeline-index">{index + 1}</span>
-                        <div>
-                          <strong>
-                            {getTeamName(state.teams, event.teamId)} · {eventLabels[event.type]}
-                          </strong>
-                          <span>{describeTimelineEvent(event)}</span>
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </article>
-            );
-          })}
-        </div>
+                  {pointEvents.length === 0 ? (
+                    <div className="empty">这一分还没有事件。</div>
+                  ) : (
+                    <ol className="timeline-list">
+                      {pointEvents.map((event, index) => (
+                        <li className={`timeline-item ${event.type.toLowerCase().replace("_", "-")}`} key={event.id}>
+                          <span className="timeline-index">{index + 1}</span>
+                          <div>
+                            <strong>
+                              {getTeamName(state.teams, event.teamId)} · {eventLabels[event.type]}
+                            </strong>
+                            <span>{describeTimelineEvent(event)}</span>
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        ) : null}
       </section>
     );
   }
@@ -1039,7 +1068,7 @@ export default function Home() {
                     awaitingPickup ? (
                       <div className="quick-actions single">
                         <button className="quick-btn pickup" onClick={() => recordPickupBy(player.id)}>
-                          接手持盘
+                          {pickupActionLabel}
                         </button>
                       </div>
                     ) : isHolder ? (
@@ -1372,7 +1401,7 @@ export default function Home() {
                     {pendingPullerId
                       ? "请选择接Pull队员"
                       : awaitingPickup
-                        ? "请选择接手持盘队员"
+                        ? `请选择${pickupActionLabel}队员`
                         : getPlayerName(state.players, holderId)}
                   </strong>
                 </div>
@@ -1382,7 +1411,7 @@ export default function Home() {
                     {pendingPullerId
                       ? `${getPlayerName(state.players, pendingPullerId)} Pull界内`
                       : awaitingPickup
-                        ? `${activeTeam?.name ?? "O-line"} 接手持盘`
+                        ? `${activeTeam?.name ?? "O-line"} ${pickupActionLabel}`
                       : `${activeTeam?.name ?? "O-line"} 进攻`}
                   </strong>
                 </div>
@@ -1401,7 +1430,7 @@ export default function Home() {
                 )}
               </div>
               <div className="quick-note">
-                每分必须先记录 Pull。持盘人只显示 Throwaway；Throwaway 后先点击原 D-line 的接手持盘人，再继续记录 Catch / Drop / Goal。
+                每分必须先记录 Pull。Pull 出界后先选择 O-line 的捡盘持盘人；Throwaway 后先点击原 D-line 的接手持盘人，再继续记录 Catch / Drop / Goal。
               </div>
             </div>
 
@@ -1557,10 +1586,9 @@ export default function Home() {
             </div>
           </section>
 
-          {renderPointTimeline()}
-
           {renderStatsTable(homeTeam?.name ?? "主队", homePlayerStats, homeTeamStats)}
           {renderStatsTable(awayTeam?.name ?? "客队", awayPlayerStats, awayTeamStats)}
+          {renderPointTimeline()}
         </section>
       </div>
     </main>

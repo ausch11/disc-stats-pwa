@@ -864,6 +864,32 @@ button:disabled {
   background: #fff;
 }
 
+.timeline-toggle {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+  text-align: left;
+}
+
+.timeline-toggle-meta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.timeline-chevron {
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: #fff;
+  color: var(--teal-dark);
+  font-size: 12px;
+  font-weight: 900;
+}
+
 .point-timeline-grid {
   display: grid;
   gap: 1px;
@@ -1052,6 +1078,12 @@ th {
 
   .point-timeline-head {
     display: grid;
+  }
+
+  .timeline-toggle,
+  .timeline-toggle-meta {
+    display: grid;
+    justify-content: stretch;
   }
 
   .timeline-meta {
