@@ -1,4 +1,4 @@
-const CACHE_NAME = "disc-stats-v7";
+const CACHE_NAME = "disc-stats-v10";
 const APP_SHELL = ["/", "/manifest.json", "/icon.svg"];
 
 self.addEventListener("install", (event) => {

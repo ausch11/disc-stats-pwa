@@ -8,6 +8,7 @@ export type EventType =
   | "D"
   | "PULL_IN"
   | "PULL_OUT"
+  | "PICKUP"
   | "SUBSTITUTION"
   | "NOTE";
 
